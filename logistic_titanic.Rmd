@@ -14,15 +14,14 @@ output:
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 library(optimbase)
 library(matrixcalc)
-library(Rcurl)
 ```
 EM/IRLS for MLE
 
 
 ```{r}
 H_inv <- function(w, rho, lambda, x){
-  #' inverse Hessian of likelihood function, if Hessian
-  #' singular, use scalar step size rho
+  # inverse Hessian of likelihood function, if Hessian
+  # singular, use scalar step size rho
   H.tmp <- -t(x) %*% w %*% x
   if(!is.singular.matrix(H.tmp)){
     H.tmp <- solve(H.tmp-2*lambda*diag(ncol(x)))}
@@ -31,23 +30,22 @@ H_inv <- function(w, rho, lambda, x){
   return(H.tmp)
 }
 
-IRLS_fit <- function(df,y,rho, lambda){
-  #' estimate theta using EM algorithm, IRLS
-  #' essentially gradient ascent
-  x <- cbind(1, as.matrix(df))
-  theta <- zeros(nx = ncol(x), ny = 1) #' initialize theta
+IRLS_fit <- function(x,y,rho, lambda){
+  # estimate theta using EM algorithm, IRLS
+  # essentially gradient ascent
+  m <- cbind(1, as.matrix(x))
+  theta <- zeros(nx = ncol(m), ny = 1) # initialize theta
   norm <- 100
   i <- 1
   while (norm > 10^(-6) && i < 1000){
-    eta <- t(theta) %*% t(x)
+    eta <- t(theta) %*% t(m)
     mu <- 1 / (1+ exp(-eta))
-    l <- t(x) %*% t(y - mu) - 2*lambda*theta #' penalised likelihood
+    l <- t(m) %*% t(y - mu) - 2*lambda*theta # penalised likelihood
     w <- diag(as.vector(mu*(1-mu)))
-    h_inv <- H_inv(w,rho, lambda, x) #' inverse Hessian
+    h_inv <- H_inv(w,rho, lambda, m) # inverse Hessian
     if (is.null(dim(h_inv))){
-      theta_update <- theta + h_inv * l }
-
-    else {
+      theta_update <- theta + h_inv * l 
+      } else {
       theta_update <- theta - h_inv %*% l}
 
     norm <- norm(theta-theta_update, type='F')
@@ -58,42 +56,40 @@ IRLS_fit <- function(df,y,rho, lambda){
 }
 
 Logistic <- function(x, theta){
-  #' get prediction from test set
-  x <- cbind(1, x)
-  test <- rep(0,nrow(x))
-  for(i in 1:nrow(x)){
-    if(1/(1+exp(-t(theta)%*%t(x[i,]))) >= .5){
-      test[i] = 1
-    }
-    else{
-      test[i] = 0
-    }
+  # get prediction from test set
+  m <- cbind(1, x)
+  pred <- rep(0,nrow(m))
+  for(i in 1:nrow(m)){
+    if(1/(1+exp(-t(theta)%*%t(m[i,]))) >= .5){
+      pred[i] = 1
+    } else{
+      pred[i] = 0}
   }
-  return(test)
+  return(pred)
 }
 
-error <- function(test, true){
-  #' check error rate
-  df <- data.frame(true,test)
-  error <- 1 - length(subset(df$test, df$true == df$test))/nrow(df)
+error <- function(pred, true){
+  # check error rate
+  df <- data.frame(true,pred)
+  error <- 1 - length(subset(df$pred, df$true == df$pred))/nrow(df)
   return(error) 
 }
 ```
 
 
 
-
 ```{r}
 #import training and testing data. 
 train <- read.csv("train.csv", stringsAsFactors = FALSE)
-View(train)
-
 test <- read.csv("test.csv", stringsAsFactors=FALSE)
-View(test)
 ```
 
-I'm going to do some minimal data cleaning. 
+First some minimal data cleaning. 
 
+I changed place of embarkment from a factor to a numeric value. Yes, I know this is cheating,
+and I probably just shouldn't include it, but my code was written as an exercise to understand
+logistic regression and does not account for categroical variables like the true fancy R package would. 
+This is not good practice, but this is also just for fun.
 
 ```{r}
 embarked <- function(df){
@@ -101,67 +97,70 @@ embarked <- function(df){
   df$Embarked[df$Embarked == 'C'] = 2
   df$Embarked[df$Embarked == 'Q'] = 3
   df$Embarked[df$Embarked == ''] = 0
-  return(df$Embarked)
+  return(df)
 }
+
+tr = embarked(train)
+te = embarked(test)
 ```
 
-Fill missing continuous with median
+
+Being somewhat more statistically sound, I'm going to impute missing "Age" values with the median.
+
+```{r}
+fillMedian <- function(dfVariable){
+  median = median(dfVariable, na.rm = TRUE)
+  missing = which(is.na(dfVariable))
+  dfVariable[missing] = median
+  return(dfVariable)
+}
+
+tr$Age <- fillMedian(train$Age)
+te$Age <- fillMedian(test$Age)
+
+
+```
+
+I'm also going to change some variables that make since to be binary. For "Cabin" and "Sex" I'm going to code these in binary. "0" if they don't have a Cabin, "1" is they do.
+"0" for male and "1" for female.
+
+```{r}
+binary <- function(dfVariable, zero, one){
+  dfVariable[which(dfVariable==zero & !is.na(dfVariable))] = 0
+  dfVariable[which(dfVariable!=0 & !is.na(dfVariable))] = 1  
+  return(dfVariable)
+}
+
+tr$Sex <- binary(train$Sex, 'male')
+te$Sex <- binary(test$Sex, 'male')
+
+tr$Cabin <- binary(train$Cabin, '')
+te$Cabin <- binary(test$Cabin, '')
+```
+
+I'm not going to use all the variables, so we'll drop the ones that don't make much sense as well as omiting
+any instances with missing variables
 
 
 ```{r}
-median = median(train$Age, na.rm = TRUE)
-train$Age[is.na(train$Age)] <- median
-median = median(train$Fare, na.rm = TRUE)
-train$Fare[is.na(train$Fare)] <- median
+tr <- tr[c("Survived", "Pclass", "Sex", "Age", "SibSp", "Parch", "Fare", 'Cabin', "Embarked")]
+te <- te[c("Pclass", "Sex", "Age", "SibSp", "Parch", "Fare",'Cabin', "Embarked")]
+tr <- na.omit(tr)
+te <- na.omit(te)
 
-median = median(test$Age, na.rm = TRUE)
-test$Age[is.na(test$Age)] <- median
-median = median(test$Fare, na.rm = TRUE)
-test$Fare[is.na(test$Fare)] <- median
-```
-
-Make categorical numeric
-
-
-```r
-train$Embarked = embarked(train)
-test$Embarked = embarked(test)
-```
-
-Make categorical binary
-
-
-```{r}
-train$Cabin[train$Cabin == ''] = 0
-train$Cabin[train$Cabin != 0] = 1
-train$Sex[train$Sex == 'female'] = 1
-train$Sex[train$Sex != 1] = 0
-
-test$Cabin[test$Cabin == ''] = 0
-test$Cabin[test$Cabin != 0] = 1
-test$Sex[test$Sex == 'female'] = 1
-test$Sex[test$Sex != 1] = 0
-```
-
-Variables kept for fit
-
-
-```{r}
-train_df = train[c("Survived", "Pclass", "Sex", "Age", "SibSp", "Parch", "Fare", 'Cabin', "Embarked")]
-test_df = test[c("Pclass", "Sex", "Age", "SibSp", "Parch", "Fare",'Cabin', "Embarked")]
 ```
 
 make everything numeric so can use matrix
 
 
 ```{r}
-train_df$Sex = as.numeric(unlist(train_df$Sex))
-train_df$Embarked = as.numeric(unlist(train_df$Embarked))
-train_df$Cabin = as.numeric(unlist(train_df$Cabin))
+tr$Sex = as.numeric(unlist(tr$Sex))
+tr$Embarked = as.numeric(unlist(tr$Embarked))
+tr$Cabin = as.numeric(unlist(tr$Cabin))
 
-test_df$Sex = as.numeric(unlist(test_df$Sex))
-test_df$Embarked = as.numeric(unlist(test_df$Embarked))
-test_df$Cabin = as.numeric(unlist(test_df$Cabin))
+te$Sex = as.numeric(unlist(te$Sex))
+te$Embarked = as.numeric(unlist(te$Embarked))
+te$Cabin = as.numeric(unlist(te$Cabin))
 ```
 
 Functions to tranform
@@ -169,53 +168,47 @@ Functions to tranform
 
 ```{r}
 tranform <- function(df){
-  #' logistic transformation
+  # logistic transformation
   tmp <- log(df[,-ncol(df)]+1)
   return(data.frame(tmp, df[,ncol(df)]))
 }
 
 standardize <- function(df){
-  #' standardize data
+  # standardize data
   return(data.frame(scale(df[,-ncol(df)]), df[,ncol(df)]))
 }
+
+x <- transform(tr[,-1]) # training data without class
+y <- tr[,1] # class of training data
 ```
 
-Split training data into test and train to check error rates
 
 
-```{r}
-smp_size <- floor(0.75 * nrow(train_df))
-```
-
-set the seed to make your partition reproductible
-
-
-```{r}
-set.seed(123)
-train_ind <- sample(seq_len(nrow(train_df)), size = smp_size)
-
-train_tmp <- train_df[train_ind, ]
-test_tmp <- train_df[-train_ind, ]
-
-x <- transform(train_tmp[,-1]) #' training data without class
-y <- train_tmp[,1] #' class of training data
-```
 
 fit logistic regression, change rho, lambda to test fits
+```{r}
+# Split training data into test and train to check error rates
+smp_size <- floor(0.75 * nrow(tr))
 
+# set the seed to make your partition reproductible
+set.seed(123)
+trainSplit <- sample(seq_len(nrow(tr)), size = smp_size)
+
+train_tmp <- tr[trainSplit, ]
+test_tmp <- tr[-trainSplit, ]
+
+x <- transform(train_tmp[,-1]) # training data without class
+y <- train_tmp[,1] # class of training data
+```
 
 ```{r}
 theta = IRLS_fit(x, y, 1, 10)
 
-x <- transform(test_tmp[,-1]) #' testing data without class
-prediction = Logistic(x, theta) #' get prediction of testing data
+x <- transform(test_tmp[,-1]) # testing data without class
+prediction = Logistic(x, theta) # get prediction of testing data
 
-err = error(prediction, test_tmp[,1]) #' error rate
+err = error(prediction, test_tmp[,1]) # error rate
 err
-```
-
-```
-## [1] 0.1883408
 ```
 
 submission
