@@ -2,81 +2,18 @@
 title: "Kaggle Titanic using penalized logistic regression"
 author: "Laura Niss"
 date: "7/21/2017"
-output: 
-  html_document:
-    code_folding: hide # creates button to show code, but defaults as hidden
-    toc: true
-    toc_float: true
+output: github_document
 
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 library(optimbase)
 library(matrixcalc)
 ```
-EM/IRLS for MLE
-
-
-```{r}
-H_inv <- function(w, rho, lambda, x){
-  # inverse Hessian of likelihood function, if Hessian
-  # singular, use scalar step size rho
-  H.tmp <- -t(x) %*% w %*% x
-  if(!is.singular.matrix(H.tmp)){
-    H.tmp <- solve(H.tmp-2*lambda*diag(ncol(x)))}
-  else{
-    H.tmp <- rho}
-  return(H.tmp)
-}
-
-IRLS_fit <- function(x,y,rho, lambda){
-  # estimate theta using EM algorithm, IRLS
-  # essentially gradient ascent
-  m <- cbind(1, as.matrix(x))
-  theta <- zeros(nx = ncol(m), ny = 1) # initialize theta
-  norm <- 100
-  i <- 1
-  while (norm > 10^(-6) && i < 1000){
-    eta <- t(theta) %*% t(m)
-    mu <- 1 / (1+ exp(-eta))
-    l <- t(m) %*% t(y - mu) - 2*lambda*theta # penalised likelihood
-    w <- diag(as.vector(mu*(1-mu)))
-    h_inv <- H_inv(w,rho, lambda, m) # inverse Hessian
-    if (is.null(dim(h_inv))){
-      theta_update <- theta + h_inv * l 
-      } else {
-      theta_update <- theta - h_inv %*% l}
-
-    norm <- norm(theta-theta_update, type='F')
-    theta <- theta_update
-    i = i + 1
-  }
-  return(theta)
-}
-
-Logistic <- function(x, theta){
-  # get prediction from test set
-  m <- cbind(1, x)
-  pred <- rep(0,nrow(m))
-  for(i in 1:nrow(m)){
-    if(1/(1+exp(-t(theta)%*%t(m[i,]))) >= .5){
-      pred[i] = 1
-    } else{
-      pred[i] = 0}
-  }
-  return(pred)
-}
-
-error <- function(pred, true){
-  # check error rate
-  df <- data.frame(true,pred)
-  error <- 1 - length(subset(df$pred, df$true == df$pred))/nrow(df)
-  return(error) 
-}
-```
-
-
+Another little test of methods using the Kaggle Titanic dataset. 
+This one will use crude code to perform logistic regression, using the EM
+algorithm and iteratively reweighted least squares to estimate the MLE.
 
 ```{r}
 #import training and testing data. 
@@ -146,8 +83,6 @@ any instances with missing variables
 tr <- tr[c("Survived", "Pclass", "Sex", "Age", "SibSp", "Parch", "Fare", 'Cabin', "Embarked")]
 te <- te[c("Pclass", "Sex", "Age", "SibSp", "Parch", "Fare",'Cabin', "Embarked")]
 tr <- na.omit(tr)
-te <- na.omit(te)
-
 ```
 
 make everything numeric so can use matrix
@@ -162,12 +97,11 @@ te$Sex = as.numeric(unlist(te$Sex))
 te$Embarked = as.numeric(unlist(te$Embarked))
 te$Cabin = as.numeric(unlist(te$Cabin))
 ```
-
-Functions to tranform
-
+Here are two tranformation to try out. This data is already pretty compact, to a log tranformation
+won't be very useful, but here it is anyways.
 
 ```{r}
-tranform <- function(df){
+logtransform <- function(df){
   # logistic transformation
   tmp <- log(df[,-ncol(df)]+1)
   return(data.frame(tmp, df[,ncol(df)]))
@@ -178,14 +112,72 @@ standardize <- function(df){
   return(data.frame(scale(df[,-ncol(df)]), df[,ncol(df)]))
 }
 
-x <- transform(tr[,-1]) # training data without class
+x <- tr[,-1] # training data without class
 y <- tr[,1] # class of training data
 ```
 
+Logistic regression algorithm.
+```{r}
+H_inv <- function(w, rho, lambda, x){
+  # inverse Hessian of likelihood function, if Hessian
+  # singular, use scalar step size rho
+  H.tmp <- -t(x) %*% w %*% x
+  if(!is.singular.matrix(H.tmp)){
+    H.tmp <- solve(H.tmp-2*lambda*diag(ncol(x)))}
+  else{
+    H.tmp <- rho}
+  return(H.tmp)
+}
 
+IRLS_fit <- function(x,y,rho, lambda){
+  # estimate theta using EM algorithm, IRLS
+  # essentially gradient ascent
+  m <- cbind(1, as.matrix(x))
+  theta <- zeros(nx = ncol(m), ny = 1) # initialize theta
+  norm <- 100
+  i <- 1
+  while (norm > 10^(-6) && i < 1000){
+    eta <- t(theta) %*% t(m)
+    mu <- 1 / (1+ exp(-eta))
+    l <- t(m) %*% t(y - mu) - 2*lambda*theta # penalised likelihood
+    w <- diag(as.vector(mu*(1-mu)))
+    h_inv <- H_inv(w,rho, lambda, m) # inverse Hessian
+    if (is.null(dim(h_inv))){
+      theta_update <- theta + h_inv * l 
+      } else {
+      theta_update <- theta - h_inv %*% l}
 
+    norm <- norm(theta-theta_update, type='F')
+    theta <- theta_update
+    i = i + 1
+  }
+  return(theta)
+}
 
-fit logistic regression, change rho, lambda to test fits
+Logistic <- function(x, theta){
+  # get prediction from test set
+  m <- cbind(1, x)
+  pred <- rep(0,nrow(m))
+  for(i in 1:nrow(m)){
+    if(1/(1+exp(-t(theta)%*%t(m[i,]))) >= .5){
+      pred[i] = 1
+    } else{
+      pred[i] = 0}
+  }
+  return(pred)
+}
+
+error <- function(pred, true){
+  # check error rate
+  df <- data.frame(true,pred)
+  error <- 1 - length(subset(df$pred, df$true == df$pred))/nrow(df)
+  return(error) 
+}
+```
+
+First I'll make a validation set from the training data. Since the variables chosen for this model were
+based on the fact that they were the numeric, I don't need to worry about the over fitting
+that can occur when variable selection is done on the entire data.
 ```{r}
 # Split training data into test and train to check error rates
 smp_size <- floor(0.75 * nrow(tr))
@@ -197,36 +189,49 @@ trainSplit <- sample(seq_len(nrow(tr)), size = smp_size)
 train_tmp <- tr[trainSplit, ]
 test_tmp <- tr[-trainSplit, ]
 
-x <- transform(train_tmp[,-1]) # training data without class
+x <- train_tmp[,-1] # training data without class
 y <- train_tmp[,1] # class of training data
 ```
+Now to fit a logistic regression.
+```{r}
+tune <- function(lambdaVector, rhoVector){
+  err <- matrix(0, nrow=length(lambdaVector), ncol=length(rhoVector))
+  i <- 1
+  for(s in lambdaVector){
+    j <- 1
+    for(t in rhoVector){
+      theta = IRLS_fit(x, y, s, t)
+      pred <- test_tmp[,-1] # testing data without class
+      prediction = Logistic(pred, theta) # get prediction of testing data
+      err[i,j] = error(prediction, test_tmp[,1]) # error rate
+      j = j + 1
+      print(i)
+      print(j)
+    }
+    i = i + 1
+  }
+  return(err)
+}
+
+theta <- IRLS_fit(x, y, 1, .01)
+
+lambdaVector <- c(1,5,10)
+rhoVector <- c(.01, .1, 1)
+
+err <- tune(lambdaVector, rhoVector)
+```
+Either pick the best parameters, or figure the testing errors are similar enough that it doesn't make
+a big difference. Now make predictions on the true Kaggle testing data.
 
 ```{r}
-theta = IRLS_fit(x, y, 1, 10)
-
-x <- transform(test_tmp[,-1]) # testing data without class
-prediction = Logistic(x, theta) # get prediction of testing data
-
-err = error(prediction, test_tmp[,1]) # error rate
-err
+te[is.na(te)] <- 0
+prediction <- Logistic(transform(te), theta)
 ```
 
-submission
-
+Finally write a submission file.
 
 ```{r}
 submit <- data.frame(PassengerId = test$PassengerId, Survived = prediction)
-```
-
-```
-## Error in data.frame(PassengerId = test$PassengerId, Survived = prediction): arguments imply differing number of rows: 418, 223
-```
-
-```{r}
-write.csv(submit, file = "logistic.csv", row.names = FALSE)
-```
-
-```
-## Error in is.data.frame(x): object 'submit' not found
+#write.csv(submit, file = "logistic.csv", row.names = FALSE)
 ```
 
